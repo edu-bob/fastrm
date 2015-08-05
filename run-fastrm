@@ -1,0 +1,116 @@
+#!/bin/sh
+
+TOPDIR=/var/nginx
+SUBDIR=cache
+
+# Only run between these hours
+
+RUN_START=23
+RUN_END=5
+
+if test ! -d $TOPDIR
+then
+    echo "ERROR: $TOPDIR does not exist, exiting."
+    exit 1
+fi
+
+cd ${TOPDIR}
+
+if test ! -d $SUBDIR
+then
+    echo "ERROR: $TOPDIR/$SUBDIR does not exist, exiting."
+    exit 0
+fi
+
+# And one more for safety
+
+dir=`pwd`
+if test "$dir" != "$TOPDIR"
+then
+    echo "ERROR: pwd is not $TOPDIR/$SUBDIR, exiting."
+    echo "ERROR: pwd=$dir"
+    exit 1
+fi
+
+# Check for empty
+
+count=`ls $SUBDIR|wc -l`
+
+if test "$count" -eq "0"
+then
+    echo "ERROR: $TOPDIR/$SUBDIR is empty, exiting."
+    exit 0;
+fi
+
+if ps -C fastrm --no-headers > /dev/null
+then
+    echo "ERROR: fastrm is already running, exiting."
+    exit 1
+fi
+
+running=true
+
+cd $TOPDIR
+
+#sleep 18 &
+fastrm -f $SUBDIR &
+
+PID=$!
+
+trap "{ kill $PID; exit 255; }" INT KILL EXIT
+
+kill -STOP $PID
+running=false
+
+echo `date '+%F %T'` "INFO: PID is $PID"
+
+while true
+do
+  hour=`date +%H`
+
+  if test $RUN_START -lt $RUN_END
+  then
+      # start->end are on the same side of midnight (e.g. 1->4)
+      if test "$hour" -ge "$RUN_START" -a "$hour" -lt "$RUN_END"
+      then should=true
+      else should=false
+      fi
+  else
+      # start->end crossed midnight (e.g. 23 -> 4)
+      if test "$hour" -ge $RUN_END -a "$hour" -lt "$RUN_START"
+      then should=false
+      else should=true
+      fi
+  fi
+
+  if $running
+  then
+      # running, check if outside the running hours
+      if $should
+      then :
+      else
+	  echo `date '+%F %T'` STOPPING $PID
+	  kill -STOP $PID
+	  running=false
+      fi
+  else
+      # not running, check if now inside the running hours
+      if $should
+      then
+	  echo `date '+%F %T'` STARTING $PID
+	  kill -CONT $PID
+	  running=true
+      fi
+  fi
+
+  sleep 300
+  if ps -o pid= -p $PID >/dev/null
+  then
+      :
+#      echo `date '+%F %T'` "INFO: Process $PID still running"
+  else
+      echo `date '+%F %T'` "INFO: Process $PID exited."
+      trap - INT KILL EXIT
+      exit 0
+  fi
+done
